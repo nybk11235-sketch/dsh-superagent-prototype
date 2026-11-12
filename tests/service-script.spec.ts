@@ -78,6 +78,16 @@ it('keeps a stop per profile', async () => {
   const skipped = await run('--respect-stop', 'start', '--profile', 'one')
   expect(skipped).toMatchObject({ code: 0, stdout: expect.stringContaining('Intentional stop is active') })
 })
+it('prints the checkout version for --version, and unknown when the package.json cannot answer', async () => {
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'dsh-superagent', version: '9.9.9-test' }))
+  const shown = await run('--version')
+  expect(shown.code).toBe(0)
+  expect(shown.stdout.trim()).toBe('dsh-superagent 9.9.9-test')
+  rmSync(join(root, 'package.json'))
+  const blind = await run('--version')
+  expect(blind.code).toBe(0)
+  expect(blind.stdout.trim()).toBe('dsh-superagent unknown')
+})
 it('takes no `dsh plugin` command of the profile for its service', async () => {
   const service = sleeper()
   processes(`${sleeper()} node node /opt/my tools/dsh plugin --profile superagent add link:/x`,
