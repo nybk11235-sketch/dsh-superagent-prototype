@@ -32,6 +32,8 @@ Read the numbered documents in order; each builds only on the ones before it.
 
 ## Development
 
+This fork is used for testing dsh-superagent on Windows.
+
 `pnpm check` runs the typecheck, the tests and the build.
 
 ## License
