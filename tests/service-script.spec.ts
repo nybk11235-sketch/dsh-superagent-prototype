@@ -1,5 +1,5 @@
 /** Tests for scripts/dsh-superagent using a temporary checkout path with spaces and stubbed ps, tmux, and dsh binaries. */
-import { execFile, spawn, type ChildProcess } from 'node:child_process'
+import { execFile, spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync }
   from 'node:fs'
 import { createServer, type Server } from 'node:http'
@@ -12,7 +12,32 @@ let root: string
 let server: Server | undefined
 let sleepers: ChildProcess[] = []
 const control = (profile: string) => join(root, '.artifacts', 'control', 'profiles', profile)
-const program = (name: string, body: string) => writeFileSync(join(root, 'bin', name), `#!/bin/sh\n${body}\n`, { mode: 0o755 })
+/** Where the .cmd twins find the POSIX shell on Windows; fixture-PATH filtering may drop its own directory (issue #6). */
+const shell = (() => {
+  if (process.platform !== 'win32') return ''
+  const found = spawnSync('where.exe', ['sh'], { encoding: 'utf8' }).stdout?.split(/\r?\n/)[0]?.trim()
+  return found ? `"${found}"` : 'sh.exe'
+})()
+/**
+ * Write a fixture as an extension-less POSIX script; on Windows, also a `.cmd` twin, because CreateProcess appends
+ * `.exe` to a bare name, so no extension-less file is ever spawned by name there (issue #6). PATHEXT-respecting
+ * consumers — the service script's `shutil.which('dsh')` — reach the body through the twin.
+ */
+const program = (name: string, body: string) => {
+  writeFileSync(join(root, 'bin', name), `#!/bin/sh\n${body}\n`, { mode: 0o755 })
+  if (process.platform === 'win32') writeFileSync(join(root, 'bin', `${name}.cmd`), `@echo off\r\n${shell} "%~dp0${name}" %*\r\nexit /b %ERRORLEVEL%\r\n`)
+}
+/**
+ * The fixture bin first, exactly as before on POSIX; on Windows also drop host PATH directories that shadow a
+ * fixture with a real `<name>.exe`, because CreateProcess prefers those regardless of order, so e.g. a later
+ * `ps.exe` would silently run instead of the fixture and the script would read the real process list (issue #6).
+ */
+const childPath = () => {
+  const bin = join(root, 'bin')
+  if (process.platform !== 'win32') return `${bin}:${process.env.PATH}`
+  const stubs = readdirSync(bin).filter(name => !name.includes('.'))
+  return [bin, ...(process.env.PATH ?? '').split(';').filter(dir => dir && !stubs.some(name => existsSync(join(dir, `${name}.exe`))))].join(';')
+}
 /** Spawn a dummy process whose PID can be listed by the fake ps binary; ignoreInterrupt simulates a hung graceful stop. */
 function sleeper(ignoreInterrupt = false): number {
   const [program, args] = ignoreInterrupt ? ['sh', ['-c', 'trap "" INT; exec sleep 60']] as const : ['sleep', ['60']] as const
@@ -49,7 +74,7 @@ afterEach(() => {
 })
 function run(...args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise(resolve => execFile('python3', [join(root, 'scripts', 'dsh-superagent'), ...args],
-    { env: { ...process.env, PATH: `${join(root, 'bin')}:${process.env.PATH}`, DSH_SUPERAGENT_PROFILE: '', DSH_SUPERAGENT_URL: '' },
+    { env: { ...process.env, PATH: childPath(), DSH_SUPERAGENT_PROFILE: '', DSH_SUPERAGENT_URL: '' },
       timeout: 20_000 },
     (error, stdout, stderr) => resolve({ code: typeof error?.code === 'number' ? error.code : 0, stdout, stderr })))
 }
