@@ -7,7 +7,10 @@ and 3 when it runs and waits for setup. A restart fixes neither 2 nor 3: they ne
 """
 
 import argparse
-import fcntl
+try:
+    import fcntl
+except ImportError:  # `fcntl` is POSIX-only; without it the guard in `main` refuses service commands, while --version and --help work.
+    fcntl = None
 import json
 import os
 from pathlib import Path
@@ -37,6 +40,15 @@ def control(profile):
 def stopped(profile):
     """Return whether `profile` was intentionally stopped."""
     return (control(profile) / 'manually-stopped').exists()
+
+
+def package_version():
+    """Return the `version` of the checkout's `package.json`, or `unknown` when the checkout cannot say."""
+    try:
+        value = json.loads((ROOT / 'package.json').read_text())
+    except (OSError, ValueError):
+        return 'unknown'
+    return value['version'] if isinstance(value, dict) and isinstance(value.get('version'), str) else 'unknown'
 
 
 def serves(args, profile):
@@ -208,6 +220,8 @@ def start(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--version', action='version', version='dsh-superagent ' + package_version(),
+                        help='Print the dsh-superagent version from package.json and exit.')
     parser.add_argument('action', choices=['start', 'stop', 'restart', 'status'])
     parser.add_argument('--profile', default=os.environ.get('DSH_SUPERAGENT_PROFILE') or 'superagent',
                         help='DSH profile that loads dsh-superagent; its tmux session is dsh-<profile>.')
@@ -223,6 +237,8 @@ def main():
         parser.error('--timeout and --stop-timeout must be positive')
     if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]*', args.profile):
         parser.error('--profile must be a DSH profile name')
+    if fcntl is None:
+        raise RuntimeError('fcntl is unavailable; start, stop, restart and status need a POSIX Python')
     os.umask(0o077)
     with (control(args.profile) / 'operation.lock').open('a') as lock:
         try:
